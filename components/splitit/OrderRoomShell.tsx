@@ -213,7 +213,7 @@ export function OrderRoomShell({ orderId }: { orderId: Id<"orders"> }) {
           { label: "Results" },
         ]
       : [
-          { active: order.status === "open", href: `/orders/${orderId}`, label: "Lobby" },
+          { href: `/orders/${orderId}`, label: "Lobby" },
           { active: order.status === "locked", href: `/orders/${orderId}`, label: "Finalize" },
           { active: order.status === "settled", href: `/orders/${orderId}`, label: "Results" },
         ];
@@ -522,13 +522,13 @@ export function OrderRoomShell({ orderId }: { orderId: Id<"orders"> }) {
               <div className="create-row">
                 <input
                   className="splitit-input"
-                  disabled={order.status !== "open" || order.viewer.status !== "active"}
+                  disabled
                   maxLength={40}
                   onChange={(event) => setDisplayNameDraft(event.target.value)}
                   value={displayName}
                 />
                 <SecondaryButton
-                  disabled={order.status !== "open" || !displayName.trim() || isPending}
+                  disabled
                   onClick={handleDisplayNameSave}
                   type="button"
                 >
@@ -546,7 +546,7 @@ export function OrderRoomShell({ orderId }: { orderId: Id<"orders"> }) {
             <div className="members-list">
               {order.members.map((member) => (
                 <MemberRow
-                  canRemove={isHost && order.status === "open" && member.role !== "host" && member.status === "active"}
+                  canRemove={false}
                   isViewer={member.memberId === order.viewer.memberId}
                   key={member.memberId}
                   member={member}
