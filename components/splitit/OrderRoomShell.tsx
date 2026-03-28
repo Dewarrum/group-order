@@ -21,6 +21,35 @@ import {
   StatusBadge,
 } from "./shared";
 
+function HeartIcon({ filled = false }: { filled?: boolean }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path
+        d="M12 20.25 4.95 13.5a4.73 4.73 0 0 1 0-6.75 4.57 4.57 0 0 1 6.56 0L12 7.24l.49-.49a4.57 4.57 0 0 1 6.56 0 4.73 4.73 0 0 1 0 6.75z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.7"
+      />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path
+        d="M12 5.25v13.5M5.25 12h13.5"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
 function MemberRow({
   canRemove,
   isViewer,
@@ -83,6 +112,7 @@ export function OrderRoomShell({ orderId }: { orderId: Id<"orders"> }) {
   const [amount, setAmount] = useState("");
   const [currencyDraft, setCurrencyDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isSettlementSheetDismissed, setIsSettlementSheetDismissed] = useState(false);
   const [isPending, startTransition] = useTransition();
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   const displayName = displayNameDraft ?? order?.viewer.displayName ?? "";
@@ -94,6 +124,20 @@ export function OrderRoomShell({ orderId }: { orderId: Id<"orders"> }) {
     }
     return `${origin}/join/${order.inviteCode}`;
   }, [order, origin]);
+
+  const isHost = order?.viewer.role === "host";
+
+  const amountPreviewMinor = useMemo(() => {
+    if (!amount.trim()) {
+      return null;
+    }
+
+    try {
+      return parseMoneyToMinorUnits(amount, currencyCode);
+    } catch {
+      return null;
+    }
+  }, [amount, currencyCode]);
 
   if (!order) {
     return (
@@ -107,8 +151,72 @@ export function OrderRoomShell({ orderId }: { orderId: Id<"orders"> }) {
   }
 
   const activeMembers = order.members.filter((member) => member.status === "active");
+  const settledMembers = order.members.filter(
+    (member) => member.status === "active" && member.amountMinor != null,
+  );
   const viewerMember = order.members.find((member) => member.memberId === order.viewer.memberId) ?? null;
-  const isHost = order.viewer.role === "host";
+  const settledDate = order.settledAt
+    ? new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(order.settledAt)
+    : null;
+  const isSettlementSheetOpen = order.status === "locked" && isHost && !isSettlementSheetDismissed;
+  const activeParticipantPreview = activeMembers.slice(0, 3);
+  const overflowParticipantCount = Math.max(activeMembers.length - activeParticipantPreview.length, 0);
+  const groupedCuisineChoices = new Map<
+    string,
+    {
+      label: string;
+      requesters: string[];
+      totalVotes: number;
+    }
+  >();
+
+  for (const member of activeMembers) {
+    for (const preference of member.preferences) {
+      const label = preference.text.trim();
+      if (!label) {
+        continue;
+      }
+
+      const key = label.toLocaleLowerCase("en");
+      const current = groupedCuisineChoices.get(key) ?? {
+        label,
+        requesters: [],
+        totalVotes: 0,
+      };
+
+      current.totalVotes += 1;
+      current.requesters.push(member.displayName);
+      groupedCuisineChoices.set(key, current);
+    }
+  }
+
+  const cuisineRanking = [...groupedCuisineChoices.values()]
+    .sort((left, right) => {
+      if (right.totalVotes !== left.totalVotes) {
+        return right.totalVotes - left.totalVotes;
+      }
+      if (right.requesters.length !== left.requesters.length) {
+        return right.requesters.length - left.requesters.length;
+      }
+      return left.label.localeCompare(right.label);
+    })
+    .map((item, index) => ({
+      ...item,
+      rank: index + 1,
+      requesterSummary: item.requesters.join(", "),
+    }));
+  const footerItems =
+    order.status === "open"
+      ? [
+          { active: true, href: `/orders/${orderId}`, label: "Vote" },
+          { href: "#invite", label: "Invite" },
+          { label: "Results" },
+        ]
+      : [
+          { active: order.status === "open", href: `/orders/${orderId}`, label: "Lobby" },
+          { active: order.status === "locked", href: `/orders/${orderId}`, label: "Finalize" },
+          { active: order.status === "settled", href: `/orders/${orderId}`, label: "Results" },
+        ];
 
   async function runMutation(task: () => Promise<void>) {
     setError(null);
@@ -159,11 +267,16 @@ export function OrderRoomShell({ orderId }: { orderId: Id<"orders"> }) {
   }
 
   function handleSettle() {
+    if (amountPreviewMinor == null) {
+      setError("Enter a valid amount.");
+      return;
+    }
+
     void runMutation(async () => {
       await settleOrder({
         currencyCode,
         orderId,
-        totalAmountMinor: parseMoneyToMinorUnits(amount, currencyCode),
+        totalAmountMinor: amountPreviewMinor,
       });
     });
   }
@@ -185,19 +298,19 @@ export function OrderRoomShell({ orderId }: { orderId: Id<"orders"> }) {
         </div>
       }
       footer={
-        <BottomNav
-          items={[
-            { active: order.status === "open", href: `/orders/${orderId}`, label: "Lobby" },
-            { active: order.status === "locked", href: `/orders/${orderId}`, label: "Finalize" },
-            { active: order.status === "settled", href: `/orders/${orderId}`, label: "Results" },
-          ]}
-        />
+        <BottomNav items={footerItems} />
       }
     >
-      <section className="lobby-status">
+      <section className={`lobby-status lobby-status-${order.status}`}>
         <div className="lobby-status-heading">
-          <SectionLabel>Lobby Status</SectionLabel>
-          <h1>{order.status === "open" ? "Collecting" : order.status === "locked" ? "Locked" : "Settled"}</h1>
+          <SectionLabel>
+            {order.status === "open"
+              ? "Active lobby"
+              : order.status === "locked"
+                ? "Locked order"
+                : "Settlement summary"}
+          </SectionLabel>
+          <h1>{order.status === "open" ? "Voting" : order.status === "locked" ? "Locked" : "Settled"}</h1>
         </div>
         <div className="split-meter">
           <span
@@ -208,135 +321,256 @@ export function OrderRoomShell({ orderId }: { orderId: Id<"orders"> }) {
         </div>
         <p>
           {order.status === "open"
-            ? "The group is still adding preferences. Update your name or food notes before the host locks the order."
+            ? "We're deciding on the cuisine. Cast your vote for the best category or add a new one."
             : order.status === "locked"
-              ? "Choices are frozen. The host can now enter the paid total and currency to calculate the split."
+              ? "Choices are frozen. The host can now enter the paid total and currency in the finalize sheet to calculate the split."
               : "The final split is ready. Each guest can now see what they owe the host."}
         </p>
+        {order.status === "settled" ? (
+          <div className="settled-banner">
+            <StatusBadge tone="success">{settledDate ? `Finalized ${settledDate}` : "Finalized"}</StatusBadge>
+            <span>{isHost ? "You covered the order." : `Pay ${order.hostName} to close the loop.`}</span>
+          </div>
+        ) : null}
       </section>
 
-      <div className="stack-grid">
-        <Card className="share-card">
-          <SectionLabel>Share Access</SectionLabel>
-          <div className="share-link-row">
-            <div>
-              <p className="share-label">Invite link</p>
-              <p className="share-value">{inviteUrl || order.inviteCode}</p>
+      {order.status === "open" ? (
+        <>
+          <section className="voting-screen">
+            <div className="voting-section-header">
+              <SectionLabel>Cuisine ranking</SectionLabel>
             </div>
-            <SecondaryButton onClick={handleCopyLink} type="button">
-              Copy
-            </SecondaryButton>
-          </div>
-          {inviteUrl ? (
-            <div className="qr-panel compact">
-              <QRCodeSVG
-                bgColor="transparent"
-                fgColor="#0c7a54"
-                size={92}
-                value={inviteUrl}
-              />
-            </div>
-          ) : null}
-        </Card>
+            {cuisineRanking.length === 0 ? (
+              <Card className="voting-empty-card">
+                <h2>No cuisine options yet</h2>
+                <p>Start the shortlist by suggesting the first cuisine below.</p>
+              </Card>
+            ) : (
+              <div className="voting-list">
+                {cuisineRanking.map((choice, index) => (
+                  <article className="vote-card" key={`${choice.label}-${index}`}>
+                    <div className="vote-rank">{choice.rank}</div>
+                    <div className="vote-copy">
+                      <h3>{choice.label}</h3>
+                      <p>Requested by {choice.requesterSummary}</p>
+                    </div>
+                    <div className="vote-score">
+                      <HeartIcon filled={index === 0} />
+                      <strong>{choice.totalVotes}</strong>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
 
-        <Card>
-          <SectionLabel>Your identity</SectionLabel>
-          <div className="create-row">
-            <input
-              className="splitit-input"
-              disabled={order.status !== "open" || order.viewer.status !== "active"}
-              maxLength={40}
-              onChange={(event) => setDisplayNameDraft(event.target.value)}
-              value={displayName}
-            />
-            <SecondaryButton
-              disabled={order.status !== "open" || !displayName.trim() || isPending}
-              onClick={handleDisplayNameSave}
-              type="button"
-            >
-              Save
-            </SecondaryButton>
-          </div>
-        </Card>
-      </div>
-
-      <Card>
-        <div className="members-header">
-          <SectionLabel>Participants</SectionLabel>
-          <span>{activeMembers.length} active</span>
-        </div>
-        <div className="members-list">
-          {order.members.map((member) => (
-            <MemberRow
-              canRemove={isHost && order.status === "open" && member.role !== "host" && member.status === "active"}
-              isViewer={member.memberId === order.viewer.memberId}
-              key={member.memberId}
-              member={member}
-              onRemove={handleRemoveMember}
-            />
-          ))}
-        </div>
-      </Card>
-
-      {viewerMember && viewerMember.status === "active" ? (
-        <Card>
-          <SectionLabel>Your preferences</SectionLabel>
-          <div className="create-row">
-            <input
-              className="splitit-input"
-              disabled={order.status !== "open"}
-              maxLength={120}
-              onChange={(event) => setNewPreference(event.target.value)}
-              placeholder="Pepperoni pizza, no onions..."
-              value={newPreference}
-            />
-            <PrimaryButton
-              disabled={order.status !== "open" || !newPreference.trim() || isPending}
-              onClick={handleAddPreference}
-              type="button"
-            >
-              Add
-            </PrimaryButton>
-          </div>
-          <div className="chip-row chip-row-large">
-            {viewerMember.preferences.map((preference) => (
-              <button
-                className="preference-chip removable"
-                disabled={order.status !== "open"}
-                key={preference._id}
-                onClick={() => handleRemovePreference(preference._id)}
-                type="button"
-              >
-                {preference.text}
-                <span aria-hidden="true">×</span>
-              </button>
-            ))}
-            {viewerMember.preferences.length === 0 ? (
-              <span className="preference-empty">No preference items yet.</span>
+            {viewerMember && viewerMember.status === "active" ? (
+              <>
+                <div className="vote-composer">
+                  <input
+                    className="vote-composer-input"
+                    disabled={order.status !== "open"}
+                    maxLength={120}
+                    onChange={(event) => setNewPreference(event.target.value)}
+                    placeholder="Suggest a new cuisine..."
+                    value={newPreference}
+                  />
+                  <button
+                    aria-label="Add cuisine suggestion"
+                    className="vote-composer-button"
+                    disabled={order.status !== "open" || !newPreference.trim() || isPending}
+                    onClick={handleAddPreference}
+                    type="button"
+                  >
+                    <PlusIcon />
+                  </button>
+                </div>
+                <div className="chip-row chip-row-large">
+                  {viewerMember.preferences.map((preference) => (
+                    <button
+                      className="preference-chip removable"
+                      disabled={order.status !== "open"}
+                      key={preference._id}
+                      onClick={() => handleRemovePreference(preference._id)}
+                      type="button"
+                    >
+                      {preference.text}
+                      <span aria-hidden="true">×</span>
+                    </button>
+                  ))}
+                  {viewerMember.preferences.length === 0 ? (
+                    <span className="preference-empty">Your cuisine picks will appear here.</span>
+                  ) : null}
+                </div>
+              </>
             ) : null}
-          </div>
-        </Card>
-      ) : null}
+
+            <div className="voting-participants">
+              <SectionLabel>Active participants</SectionLabel>
+              <div className="participant-avatar-row">
+                {activeParticipantPreview.map((member) => (
+                  <div
+                    aria-label={member.displayName}
+                    className="participant-avatar-badge"
+                    key={member.memberId}
+                    title={member.displayName}
+                  >
+                    {member.displayName.slice(0, 1).toUpperCase()}
+                  </div>
+                ))}
+                {overflowParticipantCount > 0 ? (
+                  <div className="participant-avatar-badge participant-avatar-overflow">+{overflowParticipantCount}</div>
+                ) : null}
+              </div>
+            </div>
+          </section>
+
+          <section className="stack-grid">
+            <section id="invite">
+              <Card className="share-card">
+                <SectionLabel>Share access</SectionLabel>
+                <div className="share-link-row">
+                  <div>
+                    <p className="share-label">Invite link</p>
+                    <p className="share-value">{inviteUrl || order.inviteCode}</p>
+                  </div>
+                  <SecondaryButton onClick={handleCopyLink} type="button">
+                    Copy
+                  </SecondaryButton>
+                </div>
+                {inviteUrl ? (
+                  <div className="qr-panel compact">
+                    <QRCodeSVG
+                      bgColor="transparent"
+                      fgColor="#0c7a54"
+                      size={92}
+                      value={inviteUrl}
+                    />
+                  </div>
+                ) : null}
+              </Card>
+            </section>
+
+            <Card>
+              <SectionLabel>Your identity</SectionLabel>
+              <div className="create-row">
+                <input
+                  className="splitit-input"
+                  disabled={order.viewer.status !== "active"}
+                  maxLength={40}
+                  onChange={(event) => setDisplayNameDraft(event.target.value)}
+                  value={displayName}
+                />
+                <SecondaryButton
+                  disabled={!displayName.trim() || isPending}
+                  onClick={handleDisplayNameSave}
+                  type="button"
+                >
+                  Save
+                </SecondaryButton>
+              </div>
+            </Card>
+          </section>
+
+          <Card>
+            <div className="members-header">
+              <SectionLabel>Participants</SectionLabel>
+              <span>{activeMembers.length} active</span>
+            </div>
+            <div className="members-list">
+              {order.members.map((member) => (
+                <MemberRow
+                  canRemove={isHost && member.role !== "host" && member.status === "active"}
+                  isViewer={member.memberId === order.viewer.memberId}
+                  key={member.memberId}
+                  member={member}
+                  onRemove={handleRemoveMember}
+                />
+              ))}
+            </div>
+          </Card>
+        </>
+      ) : (
+        <>
+          <section className="stack-grid">
+            <section id="invite">
+              <Card className="share-card">
+                <SectionLabel>Share Access</SectionLabel>
+                <div className="share-link-row">
+                  <div>
+                    <p className="share-label">Invite link</p>
+                    <p className="share-value">{inviteUrl || order.inviteCode}</p>
+                  </div>
+                  <SecondaryButton onClick={handleCopyLink} type="button">
+                    Copy
+                  </SecondaryButton>
+                </div>
+                {inviteUrl ? (
+                  <div className="qr-panel compact">
+                    <QRCodeSVG
+                      bgColor="transparent"
+                      fgColor="#0c7a54"
+                      size={92}
+                      value={inviteUrl}
+                    />
+                  </div>
+                ) : null}
+              </Card>
+            </section>
+
+            <Card>
+              <SectionLabel>Your identity</SectionLabel>
+              <div className="create-row">
+                <input
+                  className="splitit-input"
+                  disabled={order.status !== "open" || order.viewer.status !== "active"}
+                  maxLength={40}
+                  onChange={(event) => setDisplayNameDraft(event.target.value)}
+                  value={displayName}
+                />
+                <SecondaryButton
+                  disabled={order.status !== "open" || !displayName.trim() || isPending}
+                  onClick={handleDisplayNameSave}
+                  type="button"
+                >
+                  Save
+                </SecondaryButton>
+              </div>
+            </Card>
+          </section>
+
+          <Card>
+            <div className="members-header">
+              <SectionLabel>Participants</SectionLabel>
+              <span>{activeMembers.length} active</span>
+            </div>
+            <div className="members-list">
+              {order.members.map((member) => (
+                <MemberRow
+                  canRemove={isHost && order.status === "open" && member.role !== "host" && member.status === "active"}
+                  isViewer={member.memberId === order.viewer.memberId}
+                  key={member.memberId}
+                  member={member}
+                  onRemove={handleRemoveMember}
+                />
+              ))}
+            </div>
+          </Card>
+        </>
+      )}
 
       {error ? <p className="form-error">{error}</p> : null}
 
       {order.status === "open" ? (
-        <Card className="action-card">
+        <section className="voting-action-shell">
           {isHost ? (
-            <>
-              <div className="action-heading">
+            <PrimaryButton className="voting-lock-button" disabled={isPending} onClick={handleLock} type="button">
+              <span className="voting-lock-button-icon">
                 <LockIcon />
-                <div>
-                  <h2>Lock group choices</h2>
-                  <p>Freeze the participant list and prepare the final bill entry.</p>
-                </div>
-              </div>
-              <PrimaryButton disabled={isPending} onClick={handleLock} type="button">
-                {isPending ? "Locking..." : "Lock order"}
-              </PrimaryButton>
-            </>
+              </span>
+              <span>{isPending ? "Locking..." : "Lock group choice"}</span>
+            </PrimaryButton>
           ) : (
-            <>
+            <Card className="action-card order-state-card">
               <div className="action-heading">
                 <CopyIcon />
                 <div>
@@ -345,70 +579,47 @@ export function OrderRoomShell({ orderId }: { orderId: Id<"orders"> }) {
                 </div>
               </div>
               <SecondaryButton disabled={isPending} onClick={handleLeave} type="button">
-                Leave group
+                {isPending ? "Leaving..." : "Leave group"}
               </SecondaryButton>
-            </>
+            </Card>
           )}
-        </Card>
+        </section>
       ) : null}
 
       {order.status === "locked" ? (
-        <Card className="settlement-card">
-          <SectionLabel>Finalize & lock order</SectionLabel>
+        <Card className="action-card order-state-card locked-state-card">
           {isHost ? (
             <>
-              <div className="settlement-fields">
-                <label className="input-label" htmlFor="currency-select">
-                  Select currency
-                </label>
-                <select
-                  className="splitit-select"
-                  id="currency-select"
-                  onChange={(event) => setCurrencyDraft(event.target.value)}
-                  value={currencyCode}
-                >
-                  {COMMON_CURRENCIES.map((currency) => (
-                    <option key={currency.code} value={currency.code}>
-                      {currency.code} - {currency.label}
-                    </option>
-                  ))}
-                </select>
-                <label className="input-label" htmlFor="total-amount">
-                  Total amount
-                </label>
-                <input
-                  className="splitit-input splitit-input-large"
-                  id="total-amount"
-                  inputMode="decimal"
-                  onChange={(event) => setAmount(event.target.value)}
-                  placeholder="0.00"
-                  value={amount}
-                />
+              <div className="action-heading">
+                <LockIcon />
+                <div>
+                  <h2>Finalize the paid total</h2>
+                  <p>Open the settlement sheet, enter the receipt total, and publish the final split.</p>
+                </div>
               </div>
-              <div className="settlement-preview">
-                <span>Split progress</span>
-                <strong>
-                  {activeMembers.length} people •{" "}
-                  {amount.trim() ? formatMoney(parseMoneyToMinorUnits(amount, currencyCode), currencyCode) : "Pending"}
-                </strong>
-              </div>
-              <div className="split-meter">
-                <span style={{ width: "78%" }} />
-              </div>
-              <PrimaryButton disabled={!amount.trim() || isPending} onClick={handleSettle} type="button">
-                {isPending ? "Calculating..." : "Calculate split & lock"}
+              <PrimaryButton onClick={() => setIsSettlementSheetDismissed(false)} type="button">
+                Open finalize sheet
               </PrimaryButton>
             </>
           ) : (
-            <p className="settlement-waiting">The host is finalizing the payment total. Results will appear here when ready.</p>
+            <>
+              <div className="action-heading">
+                <CopyIcon />
+                <div>
+                  <h2>Waiting on the host</h2>
+                  <p>The lobby is locked. Results will appear here as soon as the host enters the final total.</p>
+                </div>
+              </div>
+              <p className="settlement-waiting">You can stay on this screen while the final split is prepared.</p>
+            </>
           )}
         </Card>
       ) : null}
 
       {order.status === "settled" ? (
         <>
-          <div className="summary-grid">
-            <Card className="summary-card">
+          <div className="summary-grid settlement-summary-grid">
+            <Card className="summary-card summary-card-emphasis">
               <SectionLabel>Total</SectionLabel>
               <h2>{formatMoney(order.totalAmountMinor, order.currencyCode)}</h2>
             </Card>
@@ -417,20 +628,28 @@ export function OrderRoomShell({ orderId }: { orderId: Id<"orders"> }) {
               <h2>{formatMoney(viewerMember?.amountMinor ?? null, order.currencyCode)}</h2>
             </Card>
             <Card className="summary-card">
-              <SectionLabel>Owe host</SectionLabel>
+              <SectionLabel>{isHost ? "Guests owe you" : "Owe host"}</SectionLabel>
               <h2>{formatMoney(viewerMember?.owedToHostMinor ?? null, order.currencyCode)}</h2>
             </Card>
           </div>
-          <Card>
+          <div className="split-meter settlement-meter">
+            <span style={{ width: "100%" }} />
+          </div>
+          <Card className="settlement-results-card">
             <div className="members-header">
               <SectionLabel>Settlement</SectionLabel>
-              <span>Host: {order.hostName}</span>
+              <span>
+                Host: {order.hostName} • {settledMembers.length} active
+              </span>
             </div>
             <div className="settlement-list">
-              {order.members.map((member) => (
-                <div className="settlement-item" key={member.memberId}>
+              {settledMembers.map((member) => (
+                <div className="settlement-item settlement-item-detailed" key={member.memberId}>
                   <div>
-                    <strong>{member.displayName}</strong>
+                    <div className="settlement-item-heading">
+                      <strong>{member.displayName}</strong>
+                      {member.role === "host" ? <StatusBadge tone="success">Host</StatusBadge> : null}
+                    </div>
                     <p>{member.role === "host" ? "Covered by host payment" : "Owes the host"}</p>
                   </div>
                   <div className="settlement-amounts">
@@ -442,6 +661,72 @@ export function OrderRoomShell({ orderId }: { orderId: Id<"orders"> }) {
             </div>
           </Card>
         </>
+      ) : null}
+
+      {order.status === "locked" && isHost && isSettlementSheetOpen ? (
+        <div className="settlement-sheet-backdrop" role="presentation">
+          <div
+            aria-labelledby="finalize-sheet-title"
+            aria-modal="true"
+            className="settlement-sheet"
+            role="dialog"
+          >
+            <div className="settlement-sheet-header">
+              <h2 id="finalize-sheet-title">Finalize & lock order</h2>
+              <p>Enter the total spent amount to calculate the split among the active group members.</p>
+            </div>
+            <div className="settlement-fields">
+              <label className="input-label" htmlFor="currency-select">
+                Select currency
+              </label>
+              <select
+                className="splitit-select"
+                id="currency-select"
+                onChange={(event) => setCurrencyDraft(event.target.value)}
+                value={currencyCode}
+              >
+                {COMMON_CURRENCIES.map((currency) => (
+                  <option key={currency.code} value={currency.code}>
+                    {currency.code} - {currency.label}
+                  </option>
+                ))}
+              </select>
+              <label className="input-label" htmlFor="total-amount">
+                Total amount
+              </label>
+              <input
+                className="splitit-input splitit-input-large settlement-amount-input"
+                id="total-amount"
+                inputMode="decimal"
+                onChange={(event) => setAmount(event.target.value)}
+                placeholder="0.00"
+                value={amount}
+              />
+            </div>
+            <div className="settlement-preview">
+              <span>Split progress</span>
+              <strong>
+                {activeMembers.length} people •{" "}
+                {amountPreviewMinor == null ? "Pending" : formatMoney(amountPreviewMinor, currencyCode)}
+              </strong>
+            </div>
+            <div className="split-meter">
+              <span style={{ width: amountPreviewMinor == null ? "64%" : "78%" }} />
+            </div>
+            <div className="settlement-sheet-actions">
+              <PrimaryButton
+                disabled={!amount.trim() || amountPreviewMinor == null || isPending}
+                onClick={handleSettle}
+                type="button"
+              >
+                {isPending ? "Calculating..." : "Calculate split & lock"}
+              </PrimaryButton>
+              <SecondaryButton onClick={() => setIsSettlementSheetDismissed(true)} type="button">
+                Cancel
+              </SecondaryButton>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       <div className="order-footer-links">
