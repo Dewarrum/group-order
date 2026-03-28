@@ -1,4 +1,5 @@
 import { auth } from "@clerk/nextjs/server";
+import { ConvexClientProvider } from "@/components/ConvexClientProvider";
 import { JoinOrderShell } from "@/components/splitit/JoinOrderShell";
 import { redirectToSignIn } from "@/lib/redirect";
 
@@ -14,5 +15,9 @@ export default async function JoinOrderPage({
     redirectToSignIn(`/join/${inviteCode}`);
   }
 
-  return <JoinOrderShell inviteCode={inviteCode} />;
+  return (
+    <ConvexClientProvider>
+      <JoinOrderShell inviteCode={inviteCode} />
+    </ConvexClientProvider>
+  );
 }

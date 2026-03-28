@@ -5,15 +5,25 @@ import { useAuth } from "@clerk/nextjs";
 import { ConvexReactClient } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 
-if (!process.env.NEXT_PUBLIC_CONVEX_URL) {
-  throw new Error("Missing NEXT_PUBLIC_CONVEX_URL in the environment");
-}
+let convexClient: ConvexReactClient | null = null;
 
-const convex = new ConvexReactClient(process.env.NEXT_PUBLIC_CONVEX_URL);
+function getConvexClient() {
+  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
+
+  if (!url) {
+    throw new Error("Missing NEXT_PUBLIC_CONVEX_URL in the environment");
+  }
+
+  if (!convexClient) {
+    convexClient = new ConvexReactClient(url);
+  }
+
+  return convexClient;
+}
 
 export function ConvexClientProvider({ children }: { children: ReactNode }) {
   return (
-    <ConvexProviderWithClerk client={convex} useAuth={useAuth}>
+    <ConvexProviderWithClerk client={getConvexClient()} useAuth={useAuth}>
       {children}
     </ConvexProviderWithClerk>
   );

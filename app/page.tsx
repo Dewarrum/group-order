@@ -1,4 +1,5 @@
 import { auth } from "@clerk/nextjs/server";
+import { ConvexClientProvider } from "@/components/ConvexClientProvider";
 import { DashboardShell } from "@/components/splitit/DashboardShell";
 import { redirectToSignIn } from "@/lib/redirect";
 
@@ -9,5 +10,9 @@ export default async function Home() {
     redirectToSignIn("/");
   }
 
-  return <DashboardShell />;
+  return (
+    <ConvexClientProvider>
+      <DashboardShell />
+    </ConvexClientProvider>
+  );
 }
